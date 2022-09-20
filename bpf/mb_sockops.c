@@ -1,125 +1,176 @@
-/*
-Copyright © 2022 Merbridge Authors
+#include <argp.h>
+#include <bpf/bpf.h>
+#include <bpf/libbpf.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/resource.h>
+#include <time.h>
+#include <unistd.h>
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
+#include "headers/loader_helpers.h"
+#include "mb_sockops.skel.h"
 
-    http://www.apache.org/licenses/LICENSE-2.0
+static struct env {
+    bool verbose;
+    char *cgroups_path;
+    char *bpffs;
+} env;
 
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-#include "headers/helpers.h"
-#include "headers/maps.h"
-#include "headers/mesh.h"
-#include <linux/bpf.h>
-#include <linux/in.h>
+const char *argp_program_version = "mb_sockops 0.1";
+const char argp_program_doc[] =
+    "BPF mb_sockops loader.\n"
+    "\n"
+    "USAGE: ./mb_sockops [-v|--verbose] [-c|--cgroup <path>]\n"
+    "        [-b|--bpffs <path>]\n";
 
-#if ENABLE_IPV4
-static inline int sockops_ipv4(struct bpf_sock_ops *skops)
+static const struct argp_option opts[] = {
+    {"verbose", 'v', NULL, 0, "Verbose debug output"},
+    {"cgroup", 'c', "/sys/fs/cgroup", 0, "cgroup path"},
+    {"bpffs", 'b', "/sys/fs/bpf", 0, "BPF filesystem path"},
+    {},
+};
+
+static error_t parse_arg(int key, char *arg, struct argp_state *state)
 {
-    __u64 cookie = bpf_get_socket_cookie_ops(skops);
+    struct env *env = state->input;
 
-    struct pair p;
-    memset(&p, 0, sizeof(p));
-    set_ipv4(p.sip, skops->local_ip4);
-    p.sport = bpf_htons(skops->local_port);
-    set_ipv4(p.dip, skops->remote_ip4);
-    p.dport = skops->remote_port >> 16;
-
-    struct origin_info *dst =
-        bpf_map_lookup_elem(&cookie_original_dst, &cookie);
-    if (dst) {
-        struct origin_info dd = *dst;
-        if (!(dd.flags & 1)) {
-            __u32 pid = dd.pid;
-            // process ip not detected
-            if (skops->local_ip4 == envoy_ip ||
-                skops->local_ip4 == skops->remote_ip4) {
-                // envoy to local
-                __u32 ip = skops->remote_ip4;
-                debugf("detected process %d's ip is %pI4", pid, &ip);
-                bpf_map_update_elem(&process_ip, &pid, &ip, BPF_ANY);
-#ifdef USE_RECONNECT
-                if (skops->remote_port >> 16 == bpf_htons(IN_REDIRECT_PORT)) {
-                    printk("incorrect connection: cookie=%d", cookie);
-                    return 1;
-                }
-#endif
-            } else {
-                // envoy to envoy
-                __u32 ip = skops->local_ip4;
-                bpf_map_update_elem(&process_ip, &pid, &ip, BPF_ANY);
-                debugf("detected process %d's ip is %pI4", pid, &ip);
-            }
-        }
-        // get_sockopts can read pid and cookie,
-        // we should write a new map named pair_original_dst
-        bpf_map_update_elem(&pair_original_dst, &p, &dd, BPF_ANY);
-        bpf_sock_hash_update(skops, &sock_pair_map, &p, BPF_NOEXIST);
-    } else if (skops->local_port == OUT_REDIRECT_PORT ||
-               skops->local_port == IN_REDIRECT_PORT ||
-               skops->remote_ip4 == envoy_ip) {
-        bpf_sock_hash_update(skops, &sock_pair_map, &p, BPF_NOEXIST);
+    switch (key) {
+    case 'v':
+        env->verbose = true;
+        break;
+    case 'c':
+        env->cgroups_path = arg;
+        break;
+    case 'b':
+        env->bpffs = arg;
+        break;
+    case ARGP_KEY_ARG:
+        argp_usage(state);
+        break;
+    default:
+        return ARGP_ERR_UNKNOWN;
     }
     return 0;
 }
-#endif
 
-#if ENABLE_IPV6
-static inline int sockops_ipv6(struct bpf_sock_ops *skops)
+static const struct argp argp = {
+    .options = opts,
+    .parser = parse_arg,
+    .doc = argp_program_doc,
+};
+
+static int libbpf_print_fn(enum libbpf_print_level level, const char *format,
+                           va_list args)
 {
-    __u64 cookie = bpf_get_socket_cookie_ops(skops);
-    struct pair p;
-    memset(&p, 0, sizeof(p));
-    p.sport = bpf_htons(skops->local_port);
-    p.dport = skops->remote_port >> 16;
-    set_ipv6(p.sip, skops->local_ip6);
-    set_ipv6(p.dip, skops->remote_ip6);
+    if (level == LIBBPF_DEBUG && !env.verbose)
+        return 0;
 
-    struct origin_info *dst =
-        bpf_map_lookup_elem(&cookie_original_dst, &cookie);
-    if (dst) {
-        struct origin_info dd = *dst;
-        // get_sockopts can read pid and cookie,
-        // we should write a new map named pair_original_dst
-        bpf_map_update_elem(&pair_original_dst, &p, &dd, BPF_ANY);
-        bpf_sock_hash_update(skops, &sock_pair_map, &p, BPF_NOEXIST);
-    } else if (skops->local_port == OUT_REDIRECT_PORT ||
-               skops->local_port == IN_REDIRECT_PORT ||
-               ipv6_equal(skops->remote_ip6, envoy_ip6)) {
-        bpf_sock_hash_update(skops, &sock_pair_map, &p, BPF_NOEXIST);
-    }
-    return 0;
+    return vfprintf(stderr, format, args);
 }
-#endif
 
-__section("sockops") int mb_sockops(struct bpf_sock_ops *skops)
+static volatile bool exiting = false;
+
+static void sig_handler(int sig) { exiting = true; }
+
+void print_env_maybe()
 {
-    switch (skops->op) {
-    case BPF_SOCK_OPS_PASSIVE_ESTABLISHED_CB:
-    case BPF_SOCK_OPS_ACTIVE_ESTABLISHED_CB:
-        switch (skops->family) {
-#if ENABLE_IPV4
-        case 2:
-            // AF_INET, we don't include socket.h, because it may
-            // cause an import error.
-            return sockops_ipv4(skops);
-#endif
-#if ENABLE_IPV6
-        case 10:
-            // AF_INET6
-            return sockops_ipv6(skops);
-#endif
-        }
+    if (!env.verbose)
+        return;
+
+    printf("#### ENV\n");
+    printf("%-15s : %s\n", "cgroupspath", env.cgroups_path);
+    printf("%-15s : %s\n", "bpffs", env.bpffs);
+    printf("%-15s : %s\n", "verbose", env.verbose ? "true" : "false");
+    printf("####\n");
+}
+
+int main(int argc, char **argv)
+{
+    struct mb_sockops_bpf *skel;
+    int err;
+    int cgroup_fd;
+
+    env.cgroups_path = "/sys/fs/cgroup";
+    env.bpffs = "/sys/fs/bpf";
+
+    /* Parse command line arguments */
+    err = argp_parse(&argp, argc, argv, 0, NULL, &env);
+    if (err) {
+        printf("parsing arguments failed with error: %d\n", err);
+        return err;
+    }
+
+    char *prog_pin_path = concat(env.bpffs, "/sockops");
+    char *pair_orig_dst_map_pin_path =
+        concat(concat(env.bpffs, "/tc/globals"), "/pair_orig_dst");
+
+    print_env_maybe();
+
+    libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
+    libbpf_set_print(libbpf_print_fn);
+
+    /* Cleaner handling of Ctrl-C */
+    signal(SIGINT, sig_handler);
+    signal(SIGTERM, sig_handler);
+
+    /* If program is already pinned, skip as it's probably already attached */
+    if (access(prog_pin_path, F_OK) == 0) {
+        printf("found pinned program %s - skipping\n", prog_pin_path);
         return 0;
     }
+
+    LIBBPF_OPTS(bpf_object_open_opts, open_opts);
+    (&open_opts)->pin_root_path = strdup(env.bpffs);
+
+    skel = mb_sockops_bpf__open_opts(&open_opts);
+    err = libbpf_get_error(skel);
+    if (err) {
+        printf("opening program failed with error: %d\n", err);
+        return err;
+    }
+
+    err = bpf_map__set_pin_path(skel->maps.pair_orig_dst,
+                                pair_orig_dst_map_pin_path);
+    if (err) {
+        printf("setting pin path (%s) to pair_orig_dst map failed with error: "
+               "%d\n",
+               pair_orig_dst_map_pin_path, err);
+        mb_sockops_bpf__destroy(skel);
+        return err;
+    }
+
+    err = mb_sockops_bpf__load(skel);
+    if (err) {
+        printf("loading program skeleton failed with error: %d\n", err);
+        mb_sockops_bpf__destroy(skel);
+        return err;
+    }
+
+    err = bpf_program__pin(skel->progs.mb_sockops, prog_pin_path);
+    if (err) {
+        printf("pinning mb_sockops program to %s failed with error: %d\n",
+               prog_pin_path, err);
+        mb_sockops_bpf__destroy(skel);
+        return err;
+    }
+
+    cgroup_fd = open(env.cgroups_path, O_RDONLY);
+    if (cgroup_fd == -1) {
+        printf("opening cgroup %s failed\n", env.cgroups_path);
+        mb_sockops_bpf__destroy(skel);
+        return 1;
+    }
+
+    err = bpf_prog_attach(bpf_program__fd(skel->progs.mb_sockops),
+                          cgroup_fd, BPF_CGROUP_SOCK_OPS, 0);
+    if (err) {
+        printf("attaching mb_sockops program failed with error: %d\n", err);
+        close(cgroup_fd);
+        mb_sockops_bpf__destroy(skel);
+        return err;
+    }
+
     return 0;
 }
-
-char ____license[] __section("license") = "GPL";
-int _version __section("version") = 1;

@@ -1,48 +1,164 @@
-/*
-Copyright © 2022 Merbridge Authors
+#include <argp.h>
+#include <bpf/bpf.h>
+#include <bpf/libbpf.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/resource.h>
+#include <time.h>
+#include <unistd.h>
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
+#include "headers/loader_helpers.h"
+#include "mb_bind.skel.h"
 
-    http://www.apache.org/licenses/LICENSE-2.0
+static struct env {
+    bool verbose;
+    char *cgroups_path;
+    char *bpffs;
+} env;
 
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-#include "headers/helpers.h"
-#include "headers/mesh.h"
-#include <linux/bpf.h>
-#include <linux/in.h>
+const char *argp_program_version = "mb_bind 0.1";
+const char argp_program_doc[] =
+    "BPF mb_bind loader.\n"
+    "\n"
+    "USAGE: ./mb_bind [-v|--verbose] [-c|--cgroup <path>]\n"
+    "        [-b|--bpffs <path>]\n";
 
-// this prog hook linkerd bind OUTPUT_LISTENER
-// which will makes the listen address change from 127.0.0.1:4140 to
-// 0.0.0.0:4140
-#if ENABLE_IPV4
-__section("cgroup/bind4") int mb_bind(struct bpf_sock_addr *ctx)
+static const struct argp_option opts[] = {
+    {"verbose", 'v', NULL, 0, "Verbose debug output"},
+    {"cgroup", 'c', "/sys/fs/cgroup", 0, "cgroup path"},
+    {"bpffs", 'b', "/sys/fs/bpf", 0, "BPF filesystem path"},
+    {},
+};
+
+static error_t parse_arg(int key, char *arg, struct argp_state *state)
 {
-#if MESH != LINKERD
-    // only works on linkerd
-    return 1;
-#endif
+    struct env *env = state->input;
 
-    if (ctx->user_ip4 == 0x0100007f &&
-        ctx->user_port == bpf_htons(OUT_REDIRECT_PORT)) {
-        __u64 uid = bpf_get_current_uid_gid() & 0xffffffff;
-        if (uid == SIDECAR_USER_ID) {
-            // linkerd listen localhost, we have to change the bind address to
-            // 0.0.0.0:4140
-            printk("change bind address from 127.0.0.1:%d to 0.0.0.0:%d",
-                   OUT_REDIRECT_PORT, OUT_REDIRECT_PORT);
-            ctx->user_ip4 = 0;
-        }
+    switch (key) {
+    case 'v':
+        env->verbose = true;
+        break;
+    case 'c':
+        env->cgroups_path = arg;
+        break;
+    case 'b':
+        env->bpffs = arg;
+        break;
+    case ARGP_KEY_ARG:
+        argp_usage(state);
+        break;
+    default:
+        return ARGP_ERR_UNKNOWN;
     }
-    return 1;
+    return 0;
 }
-#endif
 
-char ____license[] __section("license") = "GPL";
-int _version __section("version") = 1;
+static const struct argp argp = {
+    .options = opts,
+    .parser = parse_arg,
+    .doc = argp_program_doc,
+};
+
+static int libbpf_print_fn(enum libbpf_print_level level, const char *format,
+                           va_list args)
+{
+    if (level == LIBBPF_DEBUG && !env.verbose)
+        return 0;
+
+    return vfprintf(stderr, format, args);
+}
+
+static volatile bool exiting = false;
+
+static void sig_handler(int sig) { exiting = true; }
+
+void print_env_maybe()
+{
+    if (!env.verbose)
+        return;
+
+    printf("#### ENV\n");
+    printf("%-15s : %s\n", "cgroupspath", env.cgroups_path);
+    printf("%-15s : %s\n", "bpffs", env.bpffs);
+    printf("%-15s : %s\n", "verbose", env.verbose ? "true" : "false");
+    printf("####\n");
+}
+
+int main(int argc, char **argv)
+{
+    struct mb_bind_bpf *skel;
+    int err;
+    int cgroup_fd;
+
+    env.cgroups_path = "/sys/fs/cgroup";
+    env.bpffs = "/sys/fs/bpf";
+
+    /* Parse command line arguments */
+    err = argp_parse(&argp, argc, argv, 0, NULL, &env);
+    if (err) {
+        printf("parsing arguments failed with error: %d\n", err);
+        return err;
+    }
+
+    char *prog_pin_path = concat(env.bpffs, "/bind");
+
+    print_env_maybe();
+
+    libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
+    libbpf_set_print(libbpf_print_fn);
+
+    /* Cleaner handling of Ctrl-C */
+    signal(SIGINT, sig_handler);
+    signal(SIGTERM, sig_handler);
+
+    /* If program is already pinned, skip as it's probably already attached */
+    if (access(prog_pin_path, F_OK) == 0) {
+        printf("found pinned program %s - skipping\n", prog_pin_path);
+        return 0;
+    }
+
+    LIBBPF_OPTS(bpf_object_open_opts, open_opts);
+    (&open_opts)->pin_root_path = strdup(env.bpffs);
+
+    skel = mb_bind_bpf__open_opts(&open_opts);
+    err = libbpf_get_error(skel);
+    if (err) {
+        printf("opening program failed with error: %d\n", err);
+        return err;
+    }
+
+    err = mb_bind_bpf__load(skel);
+    if (err) {
+        printf("loading program skeleton failed with error: %d\n", err);
+        mb_bind_bpf__destroy(skel);
+        return err;
+    }
+
+    err = bpf_program__pin(skel->progs.mb_bind, prog_pin_path);
+    if (err) {
+        printf("pinning mb_bind program to %s failed with error: %d\n",
+               prog_pin_path, err);
+        mb_bind_bpf__destroy(skel);
+        return err;
+    }
+
+    cgroup_fd = open(env.cgroups_path, O_RDONLY);
+    if (cgroup_fd == -1) {
+        printf("opening cgroup %s failed\n", env.cgroups_path);
+        mb_bind_bpf__destroy(skel);
+        return 1;
+    }
+
+    err = bpf_prog_attach(bpf_program__fd(skel->progs.mb_bind), cgroup_fd,
+                          BPF_CGROUP_INET4_CONNECT, 0);
+    if (err) {
+        printf("attaching mb_bind program failed with error: %d\n", err);
+        close(cgroup_fd);
+        mb_bind_bpf__destroy(skel);
+        return err;
+    }
+
+    return 0;
+}
