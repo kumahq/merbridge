@@ -35,6 +35,9 @@ struct {
     __uint(pinning, LIBBPF_PIN_BY_NAME);
 } mark_pod_ips SEC(".maps");
 
+// local_pods stores Pods' ips in current node.
+// which can be set by controller.
+// only contains injected pods.
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 1024);
@@ -42,6 +45,7 @@ struct {
     __uint(value_size, sizeof(struct pod_config));
 } local_pod_ips SEC(".maps");
 
+// process_ip stores envoy's ip address.
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 1024);
