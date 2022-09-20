@@ -9,7 +9,6 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "headers/loader_helpers.h"
 #include "mb_redir.skel.h"
 
 static struct env {
@@ -79,22 +78,25 @@ void print_env_maybe()
     printf("####\n");
 }
 
+const char RELATIVE_PIN_PATH[] = "/redir";
+
 int main(int argc, char **argv)
 {
     struct mb_redir_bpf *skel;
-    int err;
-    int map_fd;
+    int err, map_fd;
 
     env.bpffs = "/sys/fs/bpf";
 
     /* Parse command line arguments */
     err = argp_parse(&argp, argc, argv, 0, NULL, &env);
     if (err) {
-        printf("parsing arguments failed with error: %d\n", err);
+        fprintf(stderr, "parsing arguments failed with error: %d\n", err);
         return err;
     }
 
-    char *prog_pin_path = concat(env.bpffs, "/redir");
+    size_t len = strlen(env.bpffs) + sizeof(RELATIVE_PIN_PATH) + 1;
+    char *prog_pin_path = (char *)malloc(len);
+    snprintf(prog_pin_path, len, "%s%s", env.bpffs, RELATIVE_PIN_PATH);
 
     print_env_maybe();
 
@@ -108,6 +110,7 @@ int main(int argc, char **argv)
     /* If program is already pinned, skip as it's probably already attached */
     if (access(prog_pin_path, F_OK) == 0) {
         printf("found pinned program %s - skipping\n", prog_pin_path);
+        free(prog_pin_path);
         return 0;
     }
 
@@ -117,22 +120,28 @@ int main(int argc, char **argv)
     skel = mb_redir_bpf__open_opts(&open_opts);
     err = libbpf_get_error(skel);
     if (err) {
-        printf("opening program failed with error: %d\n", err);
+        fprintf(stderr, "opening mb_redir objects failed with error: %d\n",
+                err);
+        free(prog_pin_path);
         return err;
     }
 
     err = mb_redir_bpf__load(skel);
     if (err) {
-        printf("loading program skeleton failed with error: %d\n", err);
+        fprintf(stderr, "loading mb_redir skeleton failed with error: %d\n",
+                err);
         mb_redir_bpf__destroy(skel);
+        free(prog_pin_path);
         return err;
     }
 
     err = bpf_program__pin(skel->progs.mb_msg_redir, prog_pin_path);
     if (err) {
-        printf("pinning mb_redir4 program to %s failed with error: %d\n",
-               prog_pin_path, err);
+        fprintf(stderr,
+                "pinning mb_msg_redir program to %s failed with error: %d\n",
+                prog_pin_path, err);
         mb_redir_bpf__destroy(skel);
+        free(prog_pin_path);
         return err;
     }
 
@@ -140,10 +149,14 @@ int main(int argc, char **argv)
     err = bpf_prog_attach(bpf_program__fd(skel->progs.mb_msg_redir), map_fd,
                           BPF_SK_MSG_VERDICT, 0);
     if (err) {
-        printf("attaching mb_redir4 program failed with error: %d\n", err);
+        fprintf(stderr,
+                "attaching mb_msg_redir program failed with error: %d\n", err);
         mb_redir_bpf__destroy(skel);
+        free(prog_pin_path);
         return err;
     }
+
+    free(prog_pin_path);
 
     return 0;
 }

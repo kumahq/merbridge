@@ -9,7 +9,6 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "headers/loader_helpers.h"
 #include "mb_recvmsg.skel.h"
 
 static struct env {
@@ -86,6 +85,8 @@ void print_env_maybe()
     printf("####\n");
 }
 
+const char RELATIVE_PIN_PATH[] = "/recvmsg";
+
 int main(int argc, char **argv)
 {
     struct mb_recvmsg_bpf *skel;
@@ -98,11 +99,13 @@ int main(int argc, char **argv)
     /* Parse command line arguments */
     err = argp_parse(&argp, argc, argv, 0, NULL, &env);
     if (err) {
-        printf("parsing arguments failed with error: %d\n", err);
+        fprintf(stderr, "parsing arguments failed with error: %d\n", err);
         return err;
     }
 
-    char *prog_pin_path = concat(env.bpffs, "/recvmsg");
+    size_t len = strlen(env.bpffs) + sizeof(RELATIVE_PIN_PATH) + 1;
+    char *prog_pin_path = (char *)malloc(len);
+    snprintf(prog_pin_path, len, "%s%s", env.bpffs, RELATIVE_PIN_PATH);
 
     print_env_maybe();
 
@@ -116,6 +119,7 @@ int main(int argc, char **argv)
     /* If program is already pinned, skip as it's probably already attached */
     if (access(prog_pin_path, F_OK) == 0) {
         printf("found pinned program %s - skipping\n", prog_pin_path);
+        free(prog_pin_path);
         return 0;
     }
 
@@ -125,40 +129,51 @@ int main(int argc, char **argv)
     skel = mb_recvmsg_bpf__open_opts(&open_opts);
     err = libbpf_get_error(skel);
     if (err) {
-        printf("opening program failed with error: %d\n", err);
+        fprintf(stderr, "opening mb_recvmsg objects failed with error: %d\n",
+                err);
+        free(prog_pin_path);
         return err;
     }
 
     err = mb_recvmsg_bpf__load(skel);
     if (err) {
-        printf("loading program skeleton failed with error: %d\n", err);
+        fprintf(stderr, "loading mb_recvmsg skeleton failed with error: %d\n",
+                err);
         mb_recvmsg_bpf__destroy(skel);
+        free(prog_pin_path);
         return err;
     }
 
-    err = bpf_program__pin(skel->progs.mb_recvmsg4 , prog_pin_path);
+    err = bpf_program__pin(skel->progs.mb_recvmsg4, prog_pin_path);
     if (err) {
-        printf("pinning mb_recvmsg4 program to %s failed with error: %d\n",
-               prog_pin_path, err);
+        fprintf(stderr,
+                "pinning mb_recvmsg4 program to %s failed with error: %d\n",
+                prog_pin_path, err);
         mb_recvmsg_bpf__destroy(skel);
+        free(prog_pin_path);
         return err;
     }
 
     cgroup_fd = open(env.cgroups_path, O_RDONLY);
     if (cgroup_fd == -1) {
-        printf("opening cgroup %s failed\n", env.cgroups_path);
+        fprintf(stderr, "opening cgroup %s failed\n", env.cgroups_path);
         mb_recvmsg_bpf__destroy(skel);
+        free(prog_pin_path);
         return 1;
     }
 
-    err = bpf_prog_attach(bpf_program__fd(skel->progs.mb_recvmsg4),
-                          cgroup_fd, BPF_CGROUP_UDP4_RECVMSG, 0);
+    err = bpf_prog_attach(bpf_program__fd(skel->progs.mb_recvmsg4), cgroup_fd,
+                          BPF_CGROUP_UDP4_RECVMSG, 0);
     if (err) {
-        printf("attaching mb_recvmsg4 program failed with error: %d\n", err);
+        fprintf(stderr, "attaching mb_recvmsg4 program failed with error: %d\n",
+                err);
         close(cgroup_fd);
         mb_recvmsg_bpf__destroy(skel);
+        free(prog_pin_path);
         return err;
     }
+
+    free(prog_pin_path);
 
     return 0;
 }

@@ -11,7 +11,6 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "headers/loader_helpers.h"
 #include "mb_tc.skel.h"
 
 static struct env {
@@ -91,8 +90,7 @@ void print_env_maybe()
 int main(int argc, char **argv)
 {
     struct mb_tc_bpf *skel;
-    int err;
-    int egress_fd, ingress_fd, ifindex = -1;
+    int err, egress_fd, ingress_fd, ifindex = -1;
 
     env.bpffs = "/sys/fs/bpf";
     env.iface = "eth0";
@@ -100,17 +98,9 @@ int main(int argc, char **argv)
     /* Parse command line arguments */
     err = argp_parse(&argp, argc, argv, 0, NULL, &env);
     if (err) {
-        printf("parsing arguments failed with error: %d\n", err);
+        fprintf(stderr, "parsing arguments failed with error: %d\n", err);
         return err;
     }
-
-    char *tc_globals_path = concat(env.bpffs, "/tc/globals");
-
-    char *local_pod_ips_map_pin_path =
-        concat(tc_globals_path, "/local_pod_ips");
-
-    char *pair_orig_dst_map_pin_path =
-        concat(tc_globals_path, "/pair_orig_dst");
 
     print_env_maybe();
 
@@ -127,20 +117,7 @@ int main(int argc, char **argv)
     skel = mb_tc_bpf__open_opts(&open_opts);
     err = libbpf_get_error(skel);
     if (err) {
-        printf("opening program failed with error: %d\n", err);
-        return err;
-    }
-
-    err = bpf_map__set_pin_path(skel->maps.local_pod_ips,
-                                local_pod_ips_map_pin_path);
-
-    err = bpf_map__set_pin_path(skel->maps.pair_orig_dst,
-                                pair_orig_dst_map_pin_path);
-    if (err) {
-        printf("setting pin path (%s) to local_pod_ips map failed with error: "
-               "%d\n",
-               local_pod_ips_map_pin_path, err);
-        mb_tc_bpf__destroy(skel);
+        fprintf(stderr, "opening tc program failed with error: %d\n", err);
         return err;
     }
 
@@ -153,21 +130,23 @@ int main(int argc, char **argv)
 
     ifindex = if_nametoindex(env.iface);
     if (ifindex < 1) {
-        printf("if_nametoindex(env.iface) failed\n");
+        fprintf(stderr, "trying to map interface's index (%u) to name failed\n",
+                ifindex);
         mb_tc_bpf__destroy(skel);
         return 1;
     }
 
     ingress_fd = bpf_program__fd(skel->progs.mb_tc_ingress);
     if (ingress_fd < 1) {
-        printf("ingress_fd: %d\n", ingress_fd);
+        fprintf(stderr, "ingress program fd is smaller than 0: %d\n",
+                ingress_fd);
         mb_tc_bpf__destroy(skel);
         return 1;
     }
 
     egress_fd = bpf_program__fd(skel->progs.mb_tc_egress);
     if (ingress_fd < 1) {
-        printf("egress_fd: %d\n", egress_fd);
+        fprintf(stderr, "egress program fd is smaller than 0: %d\n", egress_fd);
         mb_tc_bpf__destroy(skel);
         return 1;
     }
@@ -177,7 +156,8 @@ int main(int argc, char **argv)
 
     err = bpf_tc_hook_create(&hook);
     if (err < 0) {
-        fprintf(stderr, "Error: bpf_tc_hook_create: %s\n", strerror(-err));
+        fprintf(stderr, "creating ingress tc hook failed: %s\n",
+                strerror(-err));
         close(ingress_fd);
         close(egress_fd);
         mb_tc_bpf__destroy(skel);
@@ -189,7 +169,8 @@ int main(int argc, char **argv)
 
     err = bpf_tc_attach(&hook, &ingress_opts);
     if (err < 0) {
-        fprintf(stderr, "Error: bpf_tc_attach ingress: %s\n", strerror(-err));
+        fprintf(stderr, "attaching ingress tc program failed: %s\n",
+                strerror(-err));
         close(ingress_fd);
         close(egress_fd);
         mb_tc_bpf__destroy(skel);
@@ -202,7 +183,8 @@ int main(int argc, char **argv)
 
     err = bpf_tc_attach(&hook, &egress_opts);
     if (err < 0) {
-        fprintf(stderr, "Error: bpf_tc_attach egress: %s\n", strerror(-err));
+        fprintf(stderr, "attaching egress tc program failed: %s\n",
+                strerror(-err));
         close(ingress_fd);
         close(egress_fd);
         mb_tc_bpf__destroy(skel);
