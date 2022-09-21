@@ -85,13 +85,12 @@ void print_env_maybe()
     printf("####\n");
 }
 
-const char RELATIVE_PIN_PATH[] = "/recvmsg";
+const char RELATIVE_PIN_PATH[] = "/mb_net_ns_net_exit";
 
 int main(int argc, char **argv)
 {
-    struct mb_net_ns_net_exit *skel;
+    struct mb_net_ns_net_exit_bpf *skel;
     int err;
-    int cgroup_fd;
 
     env.cgroups_path = "/sys/fs/cgroup";
     env.bpffs = "/sys/fs/bpf";
@@ -126,7 +125,7 @@ int main(int argc, char **argv)
     LIBBPF_OPTS(bpf_object_open_opts, open_opts);
     (&open_opts)->pin_root_path = strdup(env.bpffs);
 
-    skel = mb_net_ns_net_exit_open_opts(&open_opts);
+    skel = mb_net_ns_net_exit_bpf__open_opts(&open_opts);
     err = libbpf_get_error(skel);
     if (err) {
         fprintf(stderr, "opening mb_net_ns_net_exit objects failed with error: %d\n",
@@ -135,45 +134,33 @@ int main(int argc, char **argv)
         return err;
     }
 
-    err = mb_net_ns_net_exit__load(skel);
+    err = mb_net_ns_net_exit_bpf__load(skel);
     if (err) {
         fprintf(stderr, "loading mb_net_ns_net_exit skeleton failed with error: %d\n",
                 err);
-        mb_net_ns_net_exit__destroy(skel);
+        mb_net_ns_net_exit_bpf__destroy(skel);
         free(prog_pin_path);
         return err;
     }
 
-//
-    err = mb_net_ns_net_exit__pin(skel->progs., prog_pin_path);
+    err = bpf_program__pin(skel->progs.net_ns_net_exit, prog_pin_path);
     if (err) {
         fprintf(stderr,
                 "pinning mb_net_ns_net_exit program to %s failed with error: %d\n",
                 prog_pin_path, err);
-        mb_recvmsg_bpf__destroy(skel);
+        mb_net_ns_net_exit_bpf__destroy(skel);
         free(prog_pin_path);
         return err;
     }
 
-//
-    cgroup_fd = open(env.cgroups_path, O_RDONLY);
-    if (cgroup_fd == -1) {
-        fprintf(stderr, "opening cgroup %s failed\n", env.cgroups_path);
-        mb_recvmsg_bpf__destroy(skel);
-        free(prog_pin_path);
-        return 1;
-    }
 
-    err = bpf_prog_attach(bpf_program__fd(skel->progs.mb_recvmsg4), cgroup_fd,
-                          BPF_CGROUP_UDP4_RECVMSG, 0);
-    if (err) {
+    err = mb_net_ns_net_exit_bpf__attach(skel);
+	if (err) {
         fprintf(stderr, "attaching mb_net_ns_net_exit program failed with error: %d\n",
                 err);
-        close(cgroup_fd);
-        mb_recvmsg_bpf__destroy(skel);
-        free(prog_pin_path);
+        mb_net_ns_net_exit_bpf__destroy(skel);
         return err;
-    }
+	}
 
     free(prog_pin_path);
 
