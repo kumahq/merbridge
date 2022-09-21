@@ -52,7 +52,7 @@ __section("cgroup/getsockopt") int mb_get_sockopt(struct bpf_sockopt *ctx)
         set_ipv4(p.sip, sk->dst_ip4);
         origin = bpf_map_lookup_elem(&pair_orig_dst, &p);
         if (origin) {
-            // // rewrite original_dst
+            // rewrite original_dst
             void *optval = (void *)ctx->optval;
             void *optval_end = (void *)ctx->optval_end;
             struct sockaddr_in *sockaddr = optval;

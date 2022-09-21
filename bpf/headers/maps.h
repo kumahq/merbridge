@@ -33,7 +33,7 @@ struct {
     __uint(key_size, sizeof(__u64));
     __uint(value_size, sizeof(__u32) * 4);
     __uint(pinning, LIBBPF_PIN_BY_NAME);
-} mark_pod_ips SEC(".maps");
+} netns_pod_ips SEC(".maps");
 
 // local_pods stores Pods' ips in current node.
 // which can be set by controller.
