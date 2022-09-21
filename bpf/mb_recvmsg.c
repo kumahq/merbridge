@@ -106,11 +106,7 @@ const char RELATIVE_PIN_PATH[] = "/recvmsg";
 int main(int argc, char **argv)
 {
     struct mb_recvmsg_bpf *skel;
-    int err;
-    int cgroup_fd;
-
-    env.cgroups_path = "/sys/fs/cgroup";
-    env.bpffs = "/sys/fs/bpf";
+    int err, cgroup_fd;
 
     /* Parse command line arguments */
     err = argp_parse(&argp, argc, argv, 0, NULL, &env);

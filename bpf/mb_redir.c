@@ -101,8 +101,6 @@ int main(int argc, char **argv)
     struct mb_redir_bpf *skel;
     int err, map_fd;
 
-    env.bpffs = "/sys/fs/bpf";
-
     /* Parse command line arguments */
     err = argp_parse(&argp, argc, argv, 0, NULL, &env);
     if (err) {

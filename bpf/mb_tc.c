@@ -108,9 +108,6 @@ int main(int argc, char **argv)
     struct mb_tc_bpf *skel;
     int err, egress_fd, ingress_fd, ifindex = -1;
 
-    env.bpffs = "/sys/fs/bpf";
-    env.iface = "eth0";
-
     /* Parse command line arguments */
     err = argp_parse(&argp, argc, argv, 0, NULL, &env);
     if (err) {

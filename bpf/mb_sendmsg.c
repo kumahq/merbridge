@@ -108,9 +108,6 @@ int main(int argc, char **argv)
     struct mb_sendmsg_bpf *skel;
     int err, cgroup_fd;
 
-    env.cgroups_path = "/sys/fs/cgroup";
-    env.bpffs = "/sys/fs/bpf";
-
     /* Parse command line arguments */
     err = argp_parse(&argp, argc, argv, 0, NULL, &env);
     if (err) {
