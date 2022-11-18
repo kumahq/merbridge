@@ -17,6 +17,10 @@ limitations under the License.
 #include "headers/helpers.h"
 #include "headers/mesh.h"
 
+const volatile short unsigned int out_redirect_port = 15001;
+const volatile short unsigned int dns_capture_port = 15053;
+const volatile unsigned int sidecar_user_id = 1337;
+
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 65535);
@@ -35,14 +39,14 @@ SEC("cgroup/sendmsg4") int mb_sendmsg4(struct bpf_sock_addr *ctx)
     if (bpf_htons(ctx->user_port) != 53) {
         return 1;
     }
-    if (!(is_port_listen_current_ns(ctx, ip_zero, OUT_REDIRECT_PORT) &&
-          is_port_listen_udp_current_ns(ctx, localhost, DNS_CAPTURE_PORT))) {
+    if (!(is_port_listen_current_ns(ctx, ip_zero, out_redirect_port) &&
+          is_port_listen_udp_current_ns(ctx, localhost, dns_capture_port))) {
         // this query is not from mesh injected pod, or DNS CAPTURE not enabled.
         // we do nothing.
         return 1;
     }
     __u64 uid = bpf_get_current_uid_gid() & 0xffffffff;
-    if (uid != SIDECAR_USER_ID) {
+    if (uid != sidecar_user_id) {
         __u64 cookie = bpf_get_socket_cookie(ctx);
         // needs rewrite
         struct origin_info origin;
@@ -54,7 +58,7 @@ SEC("cgroup/sendmsg4") int mb_sendmsg4(struct bpf_sock_addr *ctx)
                                 BPF_ANY)) {
             printk("send4 : update origin cookie failed: %d", cookie);
         }
-        ctx->user_port = bpf_htons(DNS_CAPTURE_PORT);
+        ctx->user_port = bpf_htons(dns_capture_port);
         ctx->user_ip4 = localhost;
     }
     return 1;
@@ -71,14 +75,14 @@ SEC("cgroup/sendmsg6") int mb_sendmsg6(struct bpf_sock_addr *ctx)
     if (bpf_htons(ctx->user_port) != 53) {
         return 1;
     }
-    if (!(is_port_listen_current_ns6(ctx, ip_zero6, OUT_REDIRECT_PORT) &&
-          is_port_listen_udp_current_ns6(ctx, localhost6, DNS_CAPTURE_PORT))) {
+    if (!(is_port_listen_current_ns6(ctx, ip_zero6, out_redirect_port) &&
+          is_port_listen_udp_current_ns6(ctx, localhost6, dns_capture_port))) {
         // this query is not from mesh injected pod, or DNS CAPTURE not enabled.
         // we do nothing.
         return 1;
     }
     __u64 uid = bpf_get_current_uid_gid() & 0xffffffff;
-    if (uid != SIDECAR_USER_ID) {
+    if (uid != sidecar_user_id) {
         // needs rewrite
         struct origin_info origin;
         memset(&origin, 0, sizeof(origin));
@@ -90,7 +94,7 @@ SEC("cgroup/sendmsg6") int mb_sendmsg6(struct bpf_sock_addr *ctx)
                                 BPF_ANY)) {
             printk("send : update origin cookie failed: %d", cookie);
         }
-        ctx->user_port = bpf_htons(DNS_CAPTURE_PORT);
+        ctx->user_port = bpf_htons(dns_capture_port);
         set_ipv6(ctx->user_ip6, localhost6);
     }
     return 1;

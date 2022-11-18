@@ -17,6 +17,9 @@ limitations under the License.
 #include "headers/helpers.h"
 #include "headers/mesh.h"
 
+const volatile short unsigned int out_redirect_port = 15001;
+const volatile unsigned int sidecar_user_id = 1337;
+
 // this prog hook linkerd bind OUTPUT_LISTENER
 // which will makes the listen address change from 127.0.0.1:4140 to
 // 0.0.0.0:4140
@@ -29,14 +32,14 @@ SEC("cgroup/bind4") int mb_bind(struct bpf_sock_addr *ctx)
 #endif
 
     if (ctx->user_ip4 == 0x0100007f &&
-        ctx->user_port == bpf_htons(OUT_REDIRECT_PORT)) {
+        ctx->user_port == bpf_htons(out_redirect_port)) {
         __u64 uid = bpf_get_current_uid_gid() & 0xffffffff;
-        if (uid == SIDECAR_USER_ID) {
+        if (uid == sidecar_user_id) {
             // linkerd listen localhost, we have to change the bind address to
             // 0.0.0.0:4140
             printk(
                 "bind4 : change bind address from 127.0.0.1:%d to 0.0.0.0:%d",
-                OUT_REDIRECT_PORT, OUT_REDIRECT_PORT);
+                out_redirect_port, out_redirect_port);
             ctx->user_ip4 = 0;
         }
     }
