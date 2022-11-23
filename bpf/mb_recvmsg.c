@@ -27,10 +27,15 @@ limitations under the License.
 
 #include "mb_recvmsg.skel.h"
 
+#define ARG_SHORT_OUT_REDIRECT_PORT 0x80
+#define ARG_SHORT_DNS_CAPTURE_PORT 0x82
+
 static struct env {
     bool verbose;
     char *cgroups_path;
     char *bpffs;
+    unsigned short int out_redirect_port;
+    unsigned short int dns_capture_port;
 } env;
 
 const char *argp_program_version = "mb_recvmsg 0.1";
@@ -44,6 +49,10 @@ static const struct argp_option opts[] = {
     {"verbose", 'v', NULL, 0, "Verbose debug output"},
     {"cgroup", 'c', "PATH", 0, "cgroup path"},
     {"bpffs", 'b', "PATH", 0, "BPF filesystem path"},
+    {"out-redirect-port", ARG_SHORT_OUT_REDIRECT_PORT, "PORT", 0,
+     "Outbound passthrough port, used to redirect outgoing traffic"},
+    {"dns-capture-port", ARG_SHORT_DNS_CAPTURE_PORT, "PORT", 0,
+     "Port where DNS traffic should be redirected to"},
     {},
 };
 
@@ -60,6 +69,22 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
         break;
     case 'b':
         env->bpffs = arg;
+        break;
+    case ARG_SHORT_OUT_REDIRECT_PORT:
+        errno = 0;
+        env->out_redirect_port = (unsigned short int)strtoul(arg, NULL, 0);
+        if (errno) {
+            fprintf(stderr, "Invalid out-redirect-port: %s\n", arg);
+            argp_usage(state);
+        }
+        break;
+    case ARG_SHORT_DNS_CAPTURE_PORT:
+        errno = 0;
+        env->dns_capture_port = (unsigned short int)strtoul(arg, NULL, 0);
+        if (errno) {
+            fprintf(stderr, "Invalid dns-capture-port: %s\n", arg);
+            argp_usage(state);
+        }
         break;
     case ARGP_KEY_ARG:
         argp_usage(state);
@@ -95,9 +120,11 @@ void print_env_maybe()
         return;
 
     printf("#### ENV\n");
-    printf("%-15s : %s\n", "cgroup", env.cgroups_path);
-    printf("%-15s : %s\n", "bpffs", env.bpffs);
-    printf("%-15s : %s\n", "verbose", env.verbose ? "true" : "false");
+    printf("%-17s : %s\n", "cgroup", env.cgroups_path);
+    printf("%-17s : %s\n", "bpffs", env.bpffs);
+    printf("%-17s : %s\n", "verbose", env.verbose ? "true" : "false");
+    printf("%-17s : %u\n", "out-redirect-port", env.out_redirect_port);
+    printf("%-17s : %u\n", "dns-capture-port", env.dns_capture_port);
     printf("####\n");
 }
 
@@ -111,6 +138,8 @@ int main(int argc, char **argv)
     // default values
     env.bpffs = "/sys/fs/bpf";
     env.cgroups_path = "/sys/fs/cgroup";
+    env.out_redirect_port = 15001;
+    env.dns_capture_port = 15053;
 
     /* Parse command line arguments */
     err = argp_parse(&argp, argc, argv, 0, NULL, &env);
@@ -150,6 +179,10 @@ int main(int argc, char **argv)
         free(prog_pin_path);
         return err;
     }
+
+    /* Parameterize BPF code */
+    skel->rodata->out_redirect_port = env.out_redirect_port;
+    skel->rodata->dns_capture_port = env.dns_capture_port;
 
     err = mb_recvmsg_bpf__load(skel);
     if (err) {

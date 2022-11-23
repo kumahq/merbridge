@@ -17,6 +17,9 @@ limitations under the License.
 #include "headers/helpers.h"
 #include "headers/mesh.h"
 
+const volatile short unsigned int out_redirect_port = 15001;
+const volatile short unsigned int in_redirect_port = 15006;
+
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 65535);
@@ -76,7 +79,7 @@ static inline int sockops_ipv4(struct bpf_sock_ops *skops)
                        &remote_ip);
                 bpf_map_update_elem(&process_ip, &pid, &remote_ip, BPF_ANY);
 #ifdef USE_RECONNECT
-                if (skops->remote_port >> 16 == bpf_htons(IN_REDIRECT_PORT)) {
+                if (skops->remote_port >> 16 == bpf_htons(in_redirect_port)) {
                     printk("sock4 : incorrect connection: cookie=%d", cookie);
                     return 1;
                 }
@@ -92,8 +95,8 @@ static inline int sockops_ipv4(struct bpf_sock_ops *skops)
         // we should write a new map named pair_orig_dst
         bpf_map_update_elem(&pair_orig_dst, &p, &dd, BPF_ANY);
         bpf_sock_hash_update(skops, &sock_pair_map, &p, BPF_NOEXIST);
-    } else if (skops->local_port == OUT_REDIRECT_PORT ||
-               skops->local_port == IN_REDIRECT_PORT ||
+    } else if (skops->local_port == out_redirect_port ||
+               skops->local_port == in_redirect_port ||
                skops->remote_ip4 == envoy_ip) {
         bpf_sock_hash_update(skops, &sock_pair_map, &p, BPF_NOEXIST);
     }
@@ -119,8 +122,8 @@ static inline int sockops_ipv6(struct bpf_sock_ops *skops)
         // we should write a new map named pair_orig_dst
         bpf_map_update_elem(&pair_orig_dst, &p, &dd, BPF_ANY);
         bpf_sock_hash_update(skops, &sock_pair_map, &p, BPF_NOEXIST);
-    } else if (skops->local_port == OUT_REDIRECT_PORT ||
-               skops->local_port == IN_REDIRECT_PORT ||
+    } else if (skops->local_port == out_redirect_port ||
+               skops->local_port == in_redirect_port ||
                ipv6_equal(skops->remote_ip6, envoy_ip6)) {
         bpf_sock_hash_update(skops, &sock_pair_map, &p, BPF_NOEXIST);
     }

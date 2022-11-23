@@ -23,6 +23,11 @@ limitations under the License.
 #define ETH_P_IP 0x0800
 #define ETH_HLEN 14
 
+const volatile short unsigned int out_redirect_port = 15001;
+const volatile short unsigned int in_redirect_port = 15006;
+const volatile short unsigned int dns_capture_port = 15053;
+const volatile unsigned int sidecar_user_id = 1337;
+
 // local_pods stores Pods' ips in current node.
 // which can be set by controller.
 // only contains injected pods.
@@ -109,7 +114,7 @@ SEC("classifier") int mb_tc_ingress(struct __sk_buff *skb)
     if ((void *)(tcph + 1) > data_end) {
         return TC_ACT_SHOT;
     }
-    __u16 in_port = bpf_htons(IN_REDIRECT_PORT);
+    __u16 in_port = bpf_htons(in_redirect_port);
     if (tcph->syn && !tcph->ack) {
         // first packet
         if (tcph->dest == in_port) {
@@ -267,7 +272,7 @@ SEC("classifier") int mb_tc_egress(struct __sk_buff *skb)
     if ((void *)(tcph + 1) > data_end) {
         return TC_ACT_SHOT;
     }
-    __u16 in_port = bpf_htons(IN_REDIRECT_PORT);
+    __u16 in_port = bpf_htons(in_redirect_port);
     if (tcph->source != in_port) {
         debugf("tc  > : no need to rewrite src port, bypassed");
         return TC_ACT_OK;

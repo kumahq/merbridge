@@ -20,6 +20,11 @@ limitations under the License.
 #if ENABLE_IPV4
 static __u32 outip = 1;
 
+const volatile short unsigned int out_redirect_port = 15001;
+const volatile short unsigned int in_redirect_port = 15006;
+const volatile short unsigned int dns_capture_port = 15053;
+const volatile unsigned int sidecar_user_id = 1337;
+
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 65535);
@@ -75,15 +80,15 @@ static inline int udp_connect4(struct bpf_sock_addr *ctx)
     if (bpf_htons(ctx->user_port) != 53) {
         return 1;
     }
-    if (!(is_port_listen_current_ns(ctx, ip_zero, OUT_REDIRECT_PORT) &&
-          is_port_listen_udp_current_ns(ctx, localhost, DNS_CAPTURE_PORT))) {
+    if (!(is_port_listen_current_ns(ctx, ip_zero, out_redirect_port) &&
+          is_port_listen_udp_current_ns(ctx, localhost, dns_capture_port))) {
         // this query is not from mesh injected pod, or DNS CAPTURE not enabled.
         // we do nothing.
         return 1;
     }
 
     __u64 uid = bpf_get_current_uid_gid() & 0xffffffff;
-    if (uid != SIDECAR_USER_ID) {
+    if (uid != sidecar_user_id) {
         // needs rewrite
         struct origin_info origin;
         memset(&origin, 0, sizeof(origin));
@@ -94,7 +99,7 @@ static inline int udp_connect4(struct bpf_sock_addr *ctx)
         if (bpf_map_update_elem(&cookie_orig_dst, &cookie, &origin, BPF_ANY)) {
             printk("conn4 : update origin cookie failed: %d", cookie);
         }
-        ctx->user_port = bpf_htons(DNS_CAPTURE_PORT);
+        ctx->user_port = bpf_htons(dns_capture_port);
         ctx->user_ip4 = localhost;
     }
     return 1;
@@ -103,7 +108,7 @@ static inline int udp_connect4(struct bpf_sock_addr *ctx)
 static inline int tcp_connect4(struct bpf_sock_addr *ctx)
 {
     // todo(kebe7jun) more reliable way to verify,
-    if (!is_port_listen_current_ns(ctx, ip_zero, OUT_REDIRECT_PORT)) {
+    if (!is_port_listen_current_ns(ctx, ip_zero, out_redirect_port)) {
         // bypass normal traffic.
         // we only deal pod's traffic managed by istio or kuma.
         return 1;
@@ -130,7 +135,7 @@ static inline int tcp_connect4(struct bpf_sock_addr *ctx)
     __u32 dst_ip = ctx->user_ip4;
     debugf("conn4 : %u %pI4 %pI4: connect", uid, &curr_pod_ip, &dst_ip);
 
-    if (uid != SIDECAR_USER_ID) {
+    if (uid != sidecar_user_id) {
         if ((dst_ip & 0xff) == 0x7f) {
             // app call local, bypass.
             return 1;
@@ -219,7 +224,7 @@ static inline int tcp_connect4(struct bpf_sock_addr *ctx)
                 outip = 1;
             }
         }
-        ctx->user_port = bpf_htons(OUT_REDIRECT_PORT);
+        ctx->user_port = bpf_htons(out_redirect_port);
     } else {
         // from envoy to others
         __u32 _dst_ip[4];
@@ -259,7 +264,7 @@ static inline int tcp_connect4(struct bpf_sock_addr *ctx)
                            &dst_ip, bpf_htons(ctx->user_port));
                     return 1;
                 }
-                ctx->user_port = bpf_htons(IN_REDIRECT_PORT);
+                ctx->user_port = bpf_htons(in_redirect_port);
             }
             origin.flags |= 1;
         } else {
@@ -278,8 +283,8 @@ static inline int tcp_connect4(struct bpf_sock_addr *ctx)
                 if (*(__u32 *)curr_ip != dst_ip) {
                     debugf("conn4 : enovy to other, rewrite dst port from %d "
                            "to %d",
-                           ctx->user_port, IN_REDIRECT_PORT);
-                    ctx->user_port = bpf_htons(IN_REDIRECT_PORT);
+                           ctx->user_port, in_redirect_port);
+                    ctx->user_port = bpf_htons(in_redirect_port);
                 }
                 origin.flags |= 1;
                 // envoy to app, no rewrite
@@ -293,7 +298,7 @@ static inline int tcp_connect4(struct bpf_sock_addr *ctx)
                 // if src is equals dst, it means envoy call self pod,
                 // we should reject this traffic in sockops,
                 // envoy will create a new connection to self pod.
-                ctx->user_port = bpf_htons(IN_REDIRECT_PORT);
+                ctx->user_port = bpf_htons(in_redirect_port);
             }
         }
         __u64 cookie = bpf_get_socket_cookie(ctx);
@@ -333,15 +338,15 @@ static inline int udp_connect6(struct bpf_sock_addr *ctx)
     if (bpf_htons(ctx->user_port) != 53) {
         return 1;
     }
-    if (!(is_port_listen_current_ns6(ctx, ip_zero6, OUT_REDIRECT_PORT) &&
-          is_port_listen_udp_current_ns6(ctx, localhost6, DNS_CAPTURE_PORT))) {
+    if (!(is_port_listen_current_ns6(ctx, ip_zero6, out_redirect_port) &&
+          is_port_listen_udp_current_ns6(ctx, localhost6, dns_capture_port))) {
         // this query is not from mesh injected pod, or DNS CAPTURE not enabled.
         // we do nothing.
         return 1;
     }
 
     __u64 uid = bpf_get_current_uid_gid() & 0xffffffff;
-    if (uid != SIDECAR_USER_ID) {
+    if (uid != sidecar_user_id) {
         // needs rewrite
         struct origin_info origin;
         memset(&origin, 0, sizeof(origin));
@@ -352,7 +357,7 @@ static inline int udp_connect6(struct bpf_sock_addr *ctx)
         if (bpf_map_update_elem(&cookie_orig_dst, &cookie, &origin, BPF_ANY)) {
             printk("conn6 : update origin cookie failed: %d", cookie);
         }
-        ctx->user_port = bpf_htons(DNS_CAPTURE_PORT);
+        ctx->user_port = bpf_htons(dns_capture_port);
         set_ipv6(ctx->user_ip6, localhost6);
     }
     return 1;
@@ -361,7 +366,7 @@ static inline int udp_connect6(struct bpf_sock_addr *ctx)
 static inline int tcp_connect6(struct bpf_sock_addr *ctx)
 {
     // todo(kebe7jun) more reliable way to verify,
-    if (!is_port_listen_current_ns6(ctx, ip_zero6, OUT_REDIRECT_PORT)) {
+    if (!is_port_listen_current_ns6(ctx, ip_zero6, out_redirect_port)) {
         // bypass normal traffic.
         // we only deal pod's traffic managed by istio or kuma.
         return 1;
@@ -387,7 +392,7 @@ static inline int tcp_connect6(struct bpf_sock_addr *ctx)
     set_ipv6(dst_ip, ctx->user_ip6);
 
     __u64 uid = bpf_get_current_uid_gid() & 0xffffffff;
-    if (uid != SIDECAR_USER_ID) {
+    if (uid != sidecar_user_id) {
         if (ipv6_equal(dst_ip, localhost6)) {
             // app call local, bypass.
             return 1;
@@ -421,7 +426,7 @@ static inline int tcp_connect6(struct bpf_sock_addr *ctx)
             printk("conn6 : bind %pI6c error", curr_pod_ip);
         }
         set_ipv6(ctx->user_ip6, localhost6);
-        ctx->user_port = bpf_htons(OUT_REDIRECT_PORT);
+        ctx->user_port = bpf_htons(out_redirect_port);
     } else {
         // from envoy to others
         if (!bpf_map_lookup_elem(&local_pod_ips, dst_ip)) {
@@ -437,8 +442,8 @@ static inline int tcp_connect6(struct bpf_sock_addr *ctx)
         set_ipv6(origin.ip, dst_ip);
         if (!ipv6_equal(dst_ip, curr_pod_ip)) {
             debugf("conn6 : enovy to other, rewrite dst port from %d to %d",
-                   ctx->user_port, bpf_htons(IN_REDIRECT_PORT));
-            ctx->user_port = bpf_htons(IN_REDIRECT_PORT);
+                   ctx->user_port, bpf_htons(in_redirect_port));
+            ctx->user_port = bpf_htons(in_redirect_port);
         }
         __u64 cookie = bpf_get_socket_cookie(ctx);
         debugf("conn6 : call from sidecar container: cookie: %d, ip: %pI6c, "

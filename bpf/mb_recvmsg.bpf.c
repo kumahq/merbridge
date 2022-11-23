@@ -17,6 +17,9 @@ limitations under the License.
 #include "headers/helpers.h"
 #include "headers/mesh.h"
 
+const volatile short unsigned int out_redirect_port = 15001;
+const volatile short unsigned int dns_capture_port = 15053;
+
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
     __uint(max_entries, 65535);
@@ -32,11 +35,11 @@ SEC("cgroup/recvmsg4") int mb_recvmsg4(struct bpf_sock_addr *ctx)
     // only works on istio and kuma
     return 1;
 #endif
-    if (bpf_htons(ctx->user_port) != DNS_CAPTURE_PORT) {
+    if (bpf_htons(ctx->user_port) != dns_capture_port) {
         return 1;
     }
-    if (!(is_port_listen_current_ns(ctx, ip_zero, OUT_REDIRECT_PORT) &&
-          is_port_listen_udp_current_ns(ctx, localhost, DNS_CAPTURE_PORT))) {
+    if (!(is_port_listen_current_ns(ctx, ip_zero, out_redirect_port) &&
+          is_port_listen_udp_current_ns(ctx, localhost, dns_capture_port))) {
         // printk("recv4 : not from pod");
         return 1;
     }
@@ -61,11 +64,11 @@ SEC("cgroup/recvmsg6") int mb_recvmsg6(struct bpf_sock_addr *ctx)
     // only works on istio
     return 1;
 #endif
-    if (bpf_htons(ctx->user_port) != DNS_CAPTURE_PORT) {
+    if (bpf_htons(ctx->user_port) != dns_capture_port) {
         return 1;
     }
-    if (!(is_port_listen_current_ns6(ctx, ip_zero6, OUT_REDIRECT_PORT) &&
-          is_port_listen_udp_current_ns6(ctx, localhost6, DNS_CAPTURE_PORT))) {
+    if (!(is_port_listen_current_ns6(ctx, ip_zero6, out_redirect_port) &&
+          is_port_listen_udp_current_ns6(ctx, localhost6, dns_capture_port))) {
         // printk("recv6 : not from pod");
         return 1;
     }
