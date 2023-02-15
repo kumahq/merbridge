@@ -1,0 +1,84 @@
+name: "Build eBPF programs"
+
+on:
+  workflow_dispatch:
+    inputs:
+      llvm-strip:
+        description: "Binary name for llvm-strip"
+        type: string
+        required: true
+        default: "llvm-strip-14"
+      debug:
+        description: "Should compile the debug version of programs"
+        type: boolean
+        required: true
+        default: true
+      release:
+        description: "Should release compiled programs"
+        type: boolean
+        required: true
+        default: true
+
+jobs:
+  build-ebpf-programs:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        submodules: recursive
+
+    - name: "Install necessary tooling"
+      run: |
+        sudo apt-get update
+        sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y \
+          libelf-dev clang pkg-config
+
+    - name: "Build programs"
+      run: |
+        make \
+          LLVM_STRIP=${{ github.event.inputs.llvm-strip }} \
+          --directory $GITHUB_WORKSPACE/bpf \
+            $GITHUB_WORKSPACE/bpf/.output/bpftool \
+            $GITHUB_WORKSPACE/bpf/.output/bpftool/bootstrap/bpftool \
+            $GITHUB_WORKSPACE/bpf/.output/libbpf.a
+          
+        make \
+          MESH_MODE=kuma \
+          DEBUG=${{ github.event.inputs.debug && 1 || 0 }} \
+          USE_RECONNECT=1 \
+          LLVM_STRIP=${{ github.event.inputs.llvm-strip }} \
+          --directory $GITHUB_WORKSPACE/bpf \
+            all
+        
+        rm -rf ./bpf/mb_*.*
+        mkdir bpf/result
+        cp bpf/mb_* bpf/result/
+
+    - name: "Build tarball"
+      run: |
+        cd bpf/result
+        tar -czvf ../all.tar.gz .
+
+    - uses: actions/upload-artifact@v3
+      with:
+        name: ebpf-programs
+        path: |
+          bpf/all.tar.gz
+          bpf/result/*
+
+    - name: "Create release tag"
+      uses: rickstaa/action-create-tag@v1
+      if: github.event.inputs.release
+      with:
+        tag: ${{ github.ref }}-${{ github.sha }}
+
+    - name: "Release"
+      uses: softprops/action-gh-release@v1
+      if: github.event.inputs.release
+      with:
+        name: ${{ github.sha }}
+        tag_name: ${{ github.ref_name }}-${{ github.sha }}
+        files: |
+          bpf/all.tar.gz
+          bpf/result/*
